@@ -99,8 +99,8 @@ def main():
     check_tokens(PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     session_data = {
-        'status': 'status',
-        'current_date': 0,
+        'status': '',
+        'current_date': int(time.time() - RETRY_PERIOD),
         'error_msg': '',
     }
 
@@ -110,7 +110,7 @@ def main():
             response = get_api_answer(timestamp)
             homework = check_response(response)
             if not homework:
-                logging.debug('Статус последней работы не поменялся')
+                logging.debug('Нет обновлений за выбранных период')
             elif session_data['status'] == homework[0].get('status'):
                 logging.debug('Статус работы не поменялся')
             else:
