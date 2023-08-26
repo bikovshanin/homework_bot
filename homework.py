@@ -1,17 +1,16 @@
 import os
 import sys
-from sys import exit
 import time
 import logging
+from sys import exit
 from http import HTTPStatus
 
 import requests
-from dotenv import load_dotenv
 import telegram
+from dotenv import load_dotenv
 
-from exceptions import DataBaseError, TelegramSendMessageError, HTTPStatusNotOk
-from database import (db_insert_hw, db_select_hw,
-                      db_select_error, db_insert_error)
+from exceptions import TelegramSendMessageError, HTTPStatusNotOk
+
 
 load_dotenv()
 
@@ -32,31 +31,27 @@ HOMEWORK_VERDICTS = {
 }
 
 
-def check_tokens(practicum_token, tg_token, tg_chat_id):
+def check_tokens(*args):
     """
     Проверка токенов.
-    Остановка скрипта
-    в случае отсутствия хотя бы одного.
+    Остановка скрипта в случае отсутствия хотя бы одного.
     """
-    if not practicum_token or not tg_token or not tg_chat_id:
-        logging.critical(
-            'Отсутствует одна или несколько '
-            'переменных окружения во время запуска бота'
-        )
-        exit(f'Токен практикума: {practicum_token}\n'
-             f'Токен телеграм: {tg_token}\n'
-             f'id телеграм: {tg_chat_id}\n')
+    for token in args:
+        if not token:
+            logging.critical(
+                'Отсутствует одна или несколько '
+                'переменных окружения во время запуска бота'
+            )
+            exit(f'Токен практикума: {args[0]}\n'
+                 f'Токен телеграм: {args[1]}\n'
+                 f'id телеграм: {args[2]}\n')
 
 
 def send_message(bot, message):
     """Отправка сообщение с обновлённым статусом домашней работы в Telegram."""
-    data = db_select_hw()
     try:
-        if HOMEWORK_VERDICTS[data.status] not in message:
-            bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
-            logging.debug(f'В Telegram отправлено сообщение: {message}')
-        else:
-            raise ValueError('Статус проверки работы не поменялся')
+        bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+        logging.debug(f'В Telegram отправлено сообщение: {message}')
     except Exception as error:
         raise TelegramSendMessageError(f'Сбой при отправке '
                                        f'сообщения в Telegram: {error}')
@@ -99,53 +94,39 @@ def parse_status(homework):
             f'работы "{homework_name}". {verdict}')
 
 
-def get_current_date():
-    """Получить timestamp для формирования ендпоинта."""
-    try:
-        timestamp = db_select_hw().current_date
-    except Exception as error:
-        logging.debug(f'База данных пуста: {error}')
-        timestamp = int(time.time() - RETRY_PERIOD)
-    return timestamp
-
-
-def post_to_db(response):
-    """Запись в базу полученных от API данных."""
-    try:
-        data = response['homeworks'][0]
-        db_insert_hw(data['homework_name'], data['status'],
-                     response['current_date'])
-    except Exception as error:
-        raise DataBaseError(f'Ошибка при записи в базу данных: {error}')
-
-
 def main():
     """Основная логика работы бота."""
     check_tokens(PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID)
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
-    db_insert_error('Сбой в работе программы: '
-                    'Сбой при отправке сообщения в Telegram: '
-                    'Статус проверки работы не поменялся')
+    session_data = {
+        'status': 'status',
+        'current_date': 0,
+        'error_msg': '',
+    }
 
     while True:
         try:
-            timestamp = get_current_date()
+            timestamp = session_data['current_date']
             response = get_api_answer(timestamp)
             homework = check_response(response)
             if not homework:
-                logging.debug('Новых работ для проверки пока нет')
+                logging.debug('Статус последней работы не поменялся')
+            elif session_data['status'] == homework[0].get('status'):
+                logging.debug('Статус работы не поменялся')
             else:
                 message = parse_status(homework[0])
                 send_message(bot, message)
-                post_to_db(response)
+                session_data.update(
+                    status=homework[0].get('status'),
+                    current_date=response['current_date'],
+                )
 
         except Exception as error:
             message = f'Сбой в работе программы: {error}'
-            db_message = db_select_error().message
             logging.error(message)
-            if db_message != message:
+            if session_data['error_msg'] != message:
                 send_message(bot, message)
-                db_insert_error(message)
+                session_data.update(error_msg=message)
         finally:
             time.sleep(RETRY_PERIOD)
 
@@ -153,7 +134,7 @@ def main():
 if __name__ == '__main__':
     logging.basicConfig(
         format=('%(asctime)s - %(levelname)s - '
-                '%(name)s - %(funcName)s - %(message)s'),
+                '%(name)s - %(funcName)s - %(lineno)d - %(message)s'),
         level=logging.DEBUG,
         handlers=[logging.StreamHandler(sys.stdout)]
     )
